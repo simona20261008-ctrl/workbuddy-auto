@@ -1,0 +1,46 @@
+name: WorkBuddy 每日签到 + 派猫猫旅行
+
+on:
+  # 主触发：GitHub 原生 schedule，每日北京时间 01:00（UTC 17:00 前一日）云端自动执行，机器无关、关机也能跑。
+  #   服务端按北京自然日切分「每日签到」（实证：BJ 10-27 01:32 触发后落账 10-27，
+  #   次日 09:02 查询显示已签、幂等跳过），故 01:00 触发即落在北京当天，无需等到日切之后。
+  # 兜底触发：北京时间 08:10（UTC 00:10）再跑一次，防止 GitHub 免费队列延迟/丢弃 01:00 调度。
+  #   签到与派猫均为幂等，重复执行不会重复领取或重复计分。
+  # 备用触发：workflow_dispatch（cron-job.org / UptimeRobot / gh / GitHub UI 手动），与 schedule 幂等不重复。
+  schedule:
+    # 北京时间 01:00 = UTC 17:00
+    - cron: '0 17 * * *'
+    # 北京时间 08:10 = UTC 00:10（兜底补跑）
+    - cron: '10 0 * * *'
+  workflow_dispatch: {}   # 外部定时服务 / `gh workflow run` / GitHub UI 手动触发
+
+permissions:
+  contents: read
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # 仅从 Secret 读取，云端无本机登录态、无明文 token
+      WB_REFRESH_TOKEN: ${{ secrets.WB_REFRESH_TOKEN }}
+      WB_FEISHU_WEBHOOK: ${{ secrets.WB_FEISHU_WEBHOOK }}
+      WB_FEISHU_SECRET: ${{ secrets.WB_FEISHU_SECRET }}
+      # 可选：配置后启用「云端自续期」，本机只需最初注入一次，之后永远关机也能跑
+      WB_GH_PAT: ${{ secrets.WB_GH_PAT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PyNaCl (仅自续期需要)
+        # 注意：if 条件里不能用 secrets 上下文（GitHub 校验会报 Unrecognized named-value），
+        # 改用 job 级 env 已映射好的 WB_GH_PAT（值来自 Secret，语义等价）。
+        if: ${{ env.WB_GH_PAT != '' }}
+        run: python3 -m pip install --quiet pynacl
+
+      - name: Run check-in + cat travel
+        run: |
+          # 解释器路径不写死版本号，动态取
+          PY=$(command -v python3 || command -v python)
+          echo "using interpreter: $PY"
+          "$PY" scripts/run_checkin.py
